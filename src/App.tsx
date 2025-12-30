@@ -19,6 +19,7 @@ export default function App() {
               <Tab>Supply</Tab>
               <Tab>Coal PLF</Tab>
               <Tab>RTM Prices</Tab>
+              <Tab>DAM Prices</Tab>
               <Tab>Rated Capacity</Tab>
               <Tab>Latest News</Tab>
               <Tab>Latest Reports</Tab>
@@ -173,6 +174,27 @@ export default function App() {
               unitLabel="Rs/Unit"
               valueColumnKey="rtm_price"
               defaultCsvPath="/data/RTM Prices.csv"
+              enableAutoFetch={false}
+              calcMode="avg"
+              valueDisplay={{
+                suffix: " Rs/Unit",
+                decimals: 2,
+              }}
+            />
+          </TabPanel>
+
+          {/* ===========================
+              DAM Prices (NEW TAB)
+              =========================== */}
+          <TabPanel>
+            <ElectricityDashboard
+              type="dam-prices"
+              title="India DAM Prices Dashboard"
+              subtitle="DAM price trends, period averages, and YoY/WoW analytics"
+              seriesLabel="DAM Prices"
+              unitLabel="Rs/Unit"
+              valueColumnKey="DAM price"
+              defaultCsvPath="/data/DAM Prices.csv"
               enableAutoFetch={false}
               calcMode="avg"
               valueDisplay={{
