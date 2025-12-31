@@ -313,12 +313,7 @@ function csvParse(text: string, valueColumnKey: string) {
 
 function sampleCSV(valueColumnKey: string) {
   // ✅ sample uses dd/mm/yyyy
-  return [
-    `date,${valueColumnKey}`,
-    "18/12/2025,10",
-    "19/12/2025,11",
-    "20/12/2025,12",
-  ].join("\n");
+  return [`date,${valueColumnKey}`, "18/12/2025,10", "19/12/2025,11", "20/12/2025,12"].join("\n");
 }
 
 function downloadCSV(filename: string, text: string) {
@@ -350,7 +345,7 @@ type DailyChartPoint = {
   units: number;
   prev_year_units: number | null;
   yoy_pct: number | null;
-  mom_pct: number | null; // weekly: WoW%, monthly: MoM%
+  mom_pct: number | null; // weekly rolling: WoW%, monthly: MoM%
 };
 
 // Month map with sum+count (for avg mode)
@@ -540,13 +535,14 @@ function computeKPIs(sortedDaily: DailyPoint[], calcMode: "sum" | "avg") {
 
   // SUM tabs: show YTD total
   // AVG tabs: show YTD average daily
-  const ytdValue =
-    calcMode === "sum" ? ytd.sum : (ytd.sum != null && ytd.count ? ytd.sum / ytd.count : null);
+  const ytdValue = calcMode === "sum" ? ytd.sum : ytd.sum != null && ytd.count ? ytd.sum / ytd.count : null;
 
   const ytdValuePY =
     calcMode === "sum"
       ? ytdPY.sum
-      : (ytdPY.sum != null && ytdPY.count ? ytdPY.sum / ytdPY.count : null);
+      : ytdPY.sum != null && ytdPY.count
+        ? ytdPY.sum / ytdPY.count
+        : null;
 
   const ytdYoY = ytdValue != null && ytdValuePY != null ? growthPct(ytdValue, ytdValuePY) : null;
 
@@ -597,15 +593,7 @@ function Card({
   );
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub?: React.ReactNode;
-}) {
+function Stat({ label, value, sub }: { label: string; value: string; sub?: React.ReactNode }) {
   return (
     <div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200">
       <div className="text-xs font-medium text-slate-500">{label}</div>
@@ -642,12 +630,7 @@ export type ElectricityDashboardProps = {
 };
 
 // explicit view types
-type ViewAs =
-  | "rolling30_avg"
-  | "daily"
-  | "weekly"
-  | "monthly"
-  | "rolling30_sum";
+type ViewAs = "rolling30_avg" | "daily" | "weekly_roll7_avg" | "monthly" | "rolling30_sum";
 
 export default function ElectricityDashboard(props: ElectricityDashboardProps) {
   const {
@@ -823,9 +806,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
         if (cancelled) return;
 
         if (!parsed.length) {
-          setErrors((prev) =>
-            prev.length ? prev : [`Default CSV loaded but no valid rows found for ${type}.`]
-          );
+          setErrors((prev) => (prev.length ? prev : [`Default CSV loaded but no valid rows found for ${type}.`]));
           return;
         }
 
@@ -906,6 +887,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
 
     const isRollingAvg = aggFreq === "rolling30_avg";
     const isRollingSum = aggFreq === "rolling30_sum";
+    const isWeeklyRollingAvg7 = aggFreq === "weekly_roll7_avg";
 
     if (aggFreq === "daily") {
       const sameDayPrevYear = (iso: string) => `${Number(iso.slice(0, 4)) - 1}${iso.slice(4)}`;
@@ -934,6 +916,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
       });
     }
 
+    // 30-day rolling avg/sum (existing)
     if (isRollingAvg || isRollingSum) {
       const points: DailyChartPoint[] = [];
       let cur = f;
@@ -942,9 +925,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
         const currSC = sumCountRangeInclusive(start, cur);
 
         const currVal =
-          isRollingSum
-            ? (currSC.sum ?? 0)
-            : (currSC.sum != null && currSC.count ? currSC.sum / currSC.count : 0);
+          isRollingSum ? (currSC.sum ?? 0) : currSC.sum != null && currSC.count ? currSC.sum / currSC.count : 0;
 
         const curPrevYear = isoMinusDays(cur, 365);
         const startPrevYear = isoMinusDays(curPrevYear, 29);
@@ -953,7 +934,9 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
         const prevVal =
           isRollingSum
             ? prevSC.sum
-            : (prevSC.sum != null && prevSC.count ? prevSC.sum / prevSC.count : null);
+            : prevSC.sum != null && prevSC.count
+              ? prevSC.sum / prevSC.count
+              : null;
 
         points.push({
           label: formatDDMMYYYY(cur),
@@ -968,53 +951,43 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
       return points;
     }
 
-    if (aggFreq === "weekly") {
-      const startW = startOfWeekISO(f);
-      const endW = startOfWeekISO(t);
+    // ✅ NEW: Weekly Rolling (AVG) (last 7 days)
+    if (isWeeklyRollingAvg7) {
+      const points: DailyChartPoint[] = [];
+      let cur = f;
 
-      const weekSum = new Map<string, number>();
-      const weekCount = new Map<string, number>();
-      for (const d of sortedDaily) {
-        const wk = startOfWeekISO(d.date);
-        weekSum.set(wk, (weekSum.get(wk) || 0) + d.value);
-        weekCount.set(wk, (weekCount.get(wk) || 0) + 1);
+      while (cur <= t) {
+        const start = isoMinusDays(cur, 6); // last 7 days inclusive
+        const currSC = sumCountRangeInclusive(start, cur);
+        const currVal = currSC.sum != null && currSC.count ? currSC.sum / currSC.count : 0;
+
+        // YoY compare vs same 7-day window last year (calendar shift by 365 days, consistent with existing rolling)
+        const curPrevYear = isoMinusDays(cur, 365);
+        const startPrevYear = isoMinusDays(curPrevYear, 6);
+        const prevSC = sumCountRangeInclusive(startPrevYear, curPrevYear);
+        const prevVal = prevSC.sum != null && prevSC.count ? prevSC.sum / prevSC.count : null;
+
+        // WoW%: compare to previous 7-day window ending 7 days earlier
+        const curPrevWeekEnd = isoMinusDays(cur, 7);
+        const curPrevWeekStart = isoMinusDays(curPrevWeekEnd, 6);
+        const prevWSC = sumCountRangeInclusive(curPrevWeekStart, curPrevWeekEnd);
+        const prevWVal = prevWSC.sum != null && prevWSC.count ? prevWSC.sum / prevWSC.count : null;
+
+        points.push({
+          label: formatDDMMYYYY(cur),
+          units: currVal,
+          prev_year_units: prevVal,
+          yoy_pct: prevVal != null ? growthPct(currVal, prevVal) : null,
+          mom_pct: prevWVal != null ? growthPct(currVal, prevWVal) : null, // WoW%
+        });
+
+        cur = isoPlusDays(cur, 1);
       }
 
-      const weeks: string[] = [];
-      let wkCursor = startW;
-      while (wkCursor <= endW) {
-        if (weekSum.has(wkCursor)) weeks.push(wkCursor);
-        wkCursor = isoPlusDays(wkCursor, 7);
-        if (weeks.length > 600) break;
-      }
-
-      return weeks.map((wk) => {
-        const sum = weekSum.get(wk)!;
-        const cnt = weekCount.get(wk)!;
-        const curr = calcMode === "sum" ? sum : sum / cnt;
-
-        const prevWk = isoMinusDays(wk, 7);
-        const prevSum = weekSum.get(prevWk);
-        const prevCnt = weekCount.get(prevWk);
-        const prevVal =
-          prevSum != null && prevCnt ? (calcMode === "sum" ? prevSum : prevSum / prevCnt) : null;
-
-        const prevYearWk = isoMinusDays(wk, 364);
-        const pySum = weekSum.get(prevYearWk);
-        const pyCnt = weekCount.get(prevYearWk);
-        const pyVal =
-          pySum != null && pyCnt ? (calcMode === "sum" ? pySum : pySum / pyCnt) : null;
-
-        return {
-          label: `Wk of ${formatDDMMYYYY(wk)}`,
-          units: curr,
-          prev_year_units: pyVal,
-          yoy_pct: pyVal != null ? growthPct(curr, pyVal) : null,
-          mom_pct: prevVal != null ? growthPct(curr, prevVal) : null,
-        };
-      });
+      return points;
     }
 
+    // monthly (unchanged)
     const startYM = monthKey(f);
     const endYM = monthKey(t);
 
@@ -1155,9 +1128,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
 
   const monthlyChartMean = useMemo(() => {
     if (!monthlyForChart.length) return null;
-    const vals = monthlyForChart
-      .map((d) => asFiniteNumber(d.value))
-      .filter((v): v is number => v != null);
+    const vals = monthlyForChart.map((d) => asFiniteNumber(d.value)).filter((v): v is number => v != null);
     if (!vals.length) return null;
     return vals.reduce((a, b) => a + b, 0) / vals.length;
   }, [monthlyForChart]);
@@ -1236,7 +1207,8 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
         tryDt.getUTCFullYear() === y + deltaYears &&
         tryDt.getUTCMonth() === m - 1 &&
         tryDt.getUTCDate() === d
-      ) return tryDt.toISOString().slice(0, 10);
+      )
+        return tryDt.toISOString().slice(0, 10);
       const lastDay = new Date(Date.UTC(y + deltaYears, m, 0));
       return lastDay.toISOString().slice(0, 10);
     };
@@ -1295,12 +1267,16 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
           const currVal =
             calcMode === "sum"
               ? currSC.sum
-              : (currSC.sum != null && currSC.count ? currSC.sum / currSC.count : null);
+              : currSC.sum != null && currSC.count
+                ? currSC.sum / currSC.count
+                : null;
 
           const prevVal =
             calcMode === "sum"
               ? prevSC.sum
-              : (prevSC.sum != null && prevSC.count ? prevSC.sum / prevSC.count : null);
+              : prevSC.sum != null && prevSC.count
+                ? prevSC.sum / prevSC.count
+                : null;
 
           yoy = currVal != null && prevVal != null ? growthPct(currVal, prevVal) : null;
         }
@@ -1396,6 +1372,9 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
 
   const rollingAvgLabel = "Last 30 Days Rolling Avg (YoY Growth)";
   const rollingSumLabel = "Last 30 Days Rolling Sum (YoY Growth)";
+  const weeklyRollingAvgLabel = "Weekly Rolling (AVG) (last 7 days)";
+
+  const isWeeklyRollingAvg7 = aggFreq === "weekly_roll7_avg";
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1519,11 +1498,12 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                         >
                           <option value="rolling30_avg">{rollingAvgLabel}</option>
                           <option value="daily">Daily</option>
-                          <option value="weekly">{calcMode === "avg" ? "Weekly (Avg)" : "Weekly (Sum)"}</option>
+
+                          {/* ✅ Replaced Weekly option with Weekly Rolling (AVG) (last 7 days) */}
+                          <option value="weekly_roll7_avg">{weeklyRollingAvgLabel}</option>
+
                           <option value="monthly">{calcMode === "avg" ? "Monthly (Avg)" : "Monthly (Sum)"}</option>
-                          {supportsRollingSum ? (
-                            <option value="rolling30_sum">{rollingSumLabel}</option>
-                          ) : null}
+                          {supportsRollingSum ? <option value="rolling30_sum">{rollingSumLabel}</option> : null}
                         </select>
                       </div>
                     </div>
@@ -1587,7 +1567,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                               onChange={(e) => setShowMoMSeries(e.target.checked)}
                               className="h-4 w-4 rounded border-slate-300"
                             />
-                            <span className="font-medium">{aggFreq === "weekly" ? "WoW %" : "MoM %"}</span>
+                            <span className="font-medium">{isWeeklyRollingAvg7 ? "WoW %" : "MoM %"}</span>
                           </label>
                         </div>
 
@@ -1620,7 +1600,11 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                       </div>
 
                       <div className="mt-2 text-[11px] text-slate-500">
-                        Rolling Avg/Sum uses a 30-day window and compares against the same 30-day window last year.
+                        {aggFreq === "rolling30_avg" || aggFreq === "rolling30_sum"
+                          ? "Rolling Avg/Sum uses a 30-day window and compares against the same 30-day window last year."
+                          : aggFreq === "weekly_roll7_avg"
+                            ? "Weekly Rolling (AVG) uses a 7-day window and compares against the same 7-day window last year."
+                            : null}
                       </div>
                     </div>
                   </div>
@@ -1683,7 +1667,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                           if (key === "units") return [fmtValue(num ?? null), labelCurr];
                           if (key === "prev_year_units") return [fmtValue(num ?? null), labelPY];
                           if (key === "yoy_pct") return [fmtPct(num ?? null), "YoY %"];
-                          if (key === "mom_pct") return [fmtPct(num ?? null), aggFreq === "weekly" ? "WoW %" : "MoM %"];
+                          if (key === "mom_pct") return [fmtPct(num ?? null), isWeeklyRollingAvg7 ? "WoW %" : "MoM %"];
 
                           if (key === "__mean_units") return [fmtValue(num ?? null), "Mean"];
                           if (key === "__p1_units") return [fmtValue(num ?? null), "+1σ"];
@@ -1704,38 +1688,171 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                       <Legend />
 
                       {showUnitsSeries ? (
-                        <Line yAxisId="left" type="monotone" dataKey="units" name="Current" dot={false} strokeWidth={2} stroke="#dc2626" />
+                        <Line
+                          yAxisId="left"
+                          type="monotone"
+                          dataKey="units"
+                          name="Current"
+                          dot={false}
+                          strokeWidth={2}
+                          stroke="#dc2626"
+                        />
                       ) : null}
 
                       {showPrevYearSeries ? (
-                        <Line yAxisId="left" type="monotone" dataKey="prev_year_units" name="Previous year" dot={false} strokeWidth={2} stroke="#6b7280" connectNulls />
+                        <Line
+                          yAxisId="left"
+                          type="monotone"
+                          dataKey="prev_year_units"
+                          name="Previous year"
+                          dot={false}
+                          strokeWidth={2}
+                          stroke="#6b7280"
+                          connectNulls
+                        />
                       ) : null}
 
                       {showYoYSeries ? (
-                        <Line yAxisId="right" type="monotone" dataKey="yoy_pct" name="YoY %" dot={false} strokeWidth={2} stroke="#16a34a" connectNulls />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="yoy_pct"
+                          name="YoY %"
+                          dot={false}
+                          strokeWidth={2}
+                          stroke="#16a34a"
+                          connectNulls
+                        />
                       ) : null}
 
                       {showMoMSeries ? (
-                        <Line yAxisId="right" type="monotone" dataKey="mom_pct" name={aggFreq === "weekly" ? "WoW %" : "MoM %"} dot={false} strokeWidth={2} stroke="#dc2626" connectNulls />
+                        <Line
+                          yAxisId="right"
+                          type="monotone"
+                          dataKey="mom_pct"
+                          name={isWeeklyRollingAvg7 ? "WoW %" : "MoM %"}
+                          dot={false}
+                          strokeWidth={2}
+                          stroke="#dc2626"
+                          connectNulls
+                        />
                       ) : null}
 
                       {showControlLines && controlStatsLeft ? (
                         <>
-                          <Line yAxisId="left" type="monotone" dataKey="__mean_units" name="Mean" dot={false} strokeWidth={2} stroke="#000000" connectNulls />
-                          <Line yAxisId="left" type="monotone" dataKey="__p1_units" name="+1σ" dot={false} strokeWidth={2} stroke="#2563eb" strokeDasharray="6 4" connectNulls />
-                          <Line yAxisId="left" type="monotone" dataKey="__p2_units" name="+2σ" dot={false} strokeWidth={2} stroke="#4f46e5" strokeDasharray="6 4" connectNulls />
-                          <Line yAxisId="left" type="monotone" dataKey="__m1_units" name="-1σ" dot={false} strokeWidth={2} stroke="#f97316" strokeDasharray="6 4" connectNulls />
-                          <Line yAxisId="left" type="monotone" dataKey="__m2_units" name="-2σ" dot={false} strokeWidth={2} stroke="#eab308" strokeDasharray="6 4" connectNulls />
+                          <Line
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey="__mean_units"
+                            name="Mean"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#000000"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey="__p1_units"
+                            name="+1σ"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#2563eb"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey="__p2_units"
+                            name="+2σ"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#4f46e5"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey="__m1_units"
+                            name="-1σ"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#f97316"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey="__m2_units"
+                            name="-2σ"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#eab308"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
                         </>
                       ) : null}
 
                       {showControlLines && controlStatsYoY ? (
                         <>
-                          <Line yAxisId="right" type="monotone" dataKey="__mean_yoy" name="Mean (YoY%)" dot={false} strokeWidth={2} stroke="#000000" connectNulls />
-                          <Line yAxisId="right" type="monotone" dataKey="__p1_yoy" name="+1σ (YoY%)" dot={false} strokeWidth={2} stroke="#2563eb" strokeDasharray="6 4" connectNulls />
-                          <Line yAxisId="right" type="monotone" dataKey="__p2_yoy" name="+2σ (YoY%)" dot={false} strokeWidth={2} stroke="#4f46e5" strokeDasharray="6 4" connectNulls />
-                          <Line yAxisId="right" type="monotone" dataKey="__m1_yoy" name="-1σ (YoY%)" dot={false} strokeWidth={2} stroke="#f97316" strokeDasharray="6 4" connectNulls />
-                          <Line yAxisId="right" type="monotone" dataKey="__m2_yoy" name="-2σ (YoY%)" dot={false} strokeWidth={2} stroke="#eab308" strokeDasharray="6 4" connectNulls />
+                          <Line
+                            yAxisId="right"
+                            type="monotone"
+                            dataKey="__mean_yoy"
+                            name="Mean (YoY%)"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#000000"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="right"
+                            type="monotone"
+                            dataKey="__p1_yoy"
+                            name="+1σ (YoY%)"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#2563eb"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="right"
+                            type="monotone"
+                            dataKey="__p2_yoy"
+                            name="+2σ (YoY%)"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#4f46e5"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="right"
+                            type="monotone"
+                            dataKey="__m1_yoy"
+                            name="-1σ (YoY%)"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#f97316"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
+                          <Line
+                            yAxisId="right"
+                            type="monotone"
+                            dataKey="__m2_yoy"
+                            name="-2σ (YoY%)"
+                            dot={false}
+                            strokeWidth={2}
+                            stroke="#eab308"
+                            strokeDasharray="6 4"
+                            connectNulls
+                          />
                         </>
                       ) : null}
                     </LineChart>
@@ -1837,11 +1954,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                 <Stat
                   label="Latest day"
                   value={kpis.latest ? formatDDMMYYYY(kpis.latest.date) : "—"}
-                  sub={
-                    kpis.latest ? (
-                      <div className="text-sm font-medium text-slate-600">{fmtValue(kpis.latest.value)}</div>
-                    ) : null
-                  }
+                  sub={kpis.latest ? <div className="text-sm font-medium text-slate-600">{fmtValue(kpis.latest.value)}</div> : null}
                 />
 
                 <Stat
@@ -1862,17 +1975,9 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                   sub={<YoYSub value={kpis.avg30YoY} suffix="YoY" />}
                 />
 
-                <Stat
-                  label={ytdLabel}
-                  value={kpis.ytdValue != null ? fmtValue(kpis.ytdValue) : "—"}
-                  sub={<YoYSub value={kpis.ytdYoY} suffix="YoY" />}
-                />
+                <Stat label={ytdLabel} value={kpis.ytdValue != null ? fmtValue(kpis.ytdValue) : "—"} sub={<YoYSub value={kpis.ytdYoY} suffix="YoY" />} />
 
-                <Stat
-                  label="MTD Average"
-                  value={kpis.mtdAvg != null ? fmtValue(kpis.mtdAvg) : "—"}
-                  sub={<YoYSub value={kpis.mtdYoY} suffix="YoY" />}
-                />
+                <Stat label="MTD Average" value={kpis.mtdAvg != null ? fmtValue(kpis.mtdAvg) : "—"} sub={<YoYSub value={kpis.mtdYoY} suffix="YoY" />} />
               </div>
             )}
           </Card>
@@ -1942,13 +2047,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                       />
 
                       {monthlyChartMean != null ? (
-                        <ReferenceLine
-                          y={monthlyChartMean}
-                          stroke="#000000"
-                          strokeDasharray="6 4"
-                          ifOverflow="extendDomain"
-                          isFront
-                        />
+                        <ReferenceLine y={monthlyChartMean} stroke="#000000" strokeDasharray="6 4" ifOverflow="extendDomain" isFront />
                       ) : null}
 
                       <Tooltip
@@ -2051,9 +2150,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                       <tfoot>
                         <tr className="border-t border-slate-200 bg-slate-50">
                           <td className="px-3 py-2 font-semibold text-slate-700">Avg (24M)</td>
-                          <td className="px-3 py-2 font-semibold text-slate-900">
-                            {fmtValue(monthlyFooterAvgForPeakDemand)}
-                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-900">{fmtValue(monthlyFooterAvgForPeakDemand)}</td>
                           <td className="px-3 py-2" />
                           <td className="px-3 py-2" />
                         </tr>
@@ -2078,9 +2175,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                         .reverse()
                         .map((w) => (
                           <tr key={w.weekStart} className="border-t border-slate-100">
-                            <td className="px-3 py-2 font-medium text-slate-900">
-                              Week starting {formatDDMMYY(w.weekStart)}
-                            </td>
+                            <td className="px-3 py-2 font-medium text-slate-900">Week starting {formatDDMMYY(w.weekStart)}</td>
                             <td className="px-3 py-2 text-slate-700">{fmtValue(w.value)}</td>
                             <td className="px-3 py-2 text-slate-700">{fmtPct(w.wow_pct)}</td>
                             <td className="px-3 py-2 text-slate-700">{fmtPct(w.yoy_pct)}</td>
