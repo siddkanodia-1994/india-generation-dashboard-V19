@@ -630,7 +630,13 @@ export type ElectricityDashboardProps = {
 };
 
 // explicit view types
-type ViewAs = "rolling30_avg" | "daily" | "weekly_roll7_avg" | "monthly" | "rolling30_sum";
+type ViewAs =
+  | "rolling30_avg"
+  | "rolling14_avg"
+  | "daily"
+  | "weekly_roll7_avg"
+  | "monthly"
+  | "rolling30_sum";
 
 export default function ElectricityDashboard(props: ElectricityDashboardProps) {
   const {
@@ -885,8 +891,9 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
       return { sum: count ? sum : null, count };
     };
 
-    const isRollingAvg = aggFreq === "rolling30_avg";
-    const isRollingSum = aggFreq === "rolling30_sum";
+    const isRollingAvg30 = aggFreq === "rolling30_avg";
+    const isRollingAvg14 = aggFreq === "rolling14_avg";
+    const isRollingSum30 = aggFreq === "rolling30_sum";
     const isWeeklyRollingAvg7 = aggFreq === "weekly_roll7_avg";
 
     if (aggFreq === "daily") {
@@ -917,7 +924,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
     }
 
     // 30-day rolling avg/sum (existing)
-    if (isRollingAvg || isRollingSum) {
+    if (isRollingAvg30 || isRollingSum30) {
       const points: DailyChartPoint[] = [];
       let cur = f;
       while (cur <= t) {
@@ -925,14 +932,14 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
         const currSC = sumCountRangeInclusive(start, cur);
 
         const currVal =
-          isRollingSum ? (currSC.sum ?? 0) : currSC.sum != null && currSC.count ? currSC.sum / currSC.count : 0;
+          isRollingSum30 ? (currSC.sum ?? 0) : currSC.sum != null && currSC.count ? currSC.sum / currSC.count : 0;
 
         const curPrevYear = isoMinusDays(cur, 365);
         const startPrevYear = isoMinusDays(curPrevYear, 29);
         const prevSC = sumCountRangeInclusive(startPrevYear, curPrevYear);
 
         const prevVal =
-          isRollingSum
+          isRollingSum30
             ? prevSC.sum
             : prevSC.sum != null && prevSC.count
               ? prevSC.sum / prevSC.count
@@ -951,7 +958,35 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
       return points;
     }
 
-    // ✅ NEW: Weekly Rolling (AVG) (last 7 days)
+    // ✅ NEW: Fortnightly Rolling (AVG) (last 14 days)
+    if (isRollingAvg14) {
+      const points: DailyChartPoint[] = [];
+      let cur = f;
+      while (cur <= t) {
+        const start = isoMinusDays(cur, 13); // last 14 days inclusive
+        const currSC = sumCountRangeInclusive(start, cur);
+        const currVal = currSC.sum != null && currSC.count ? currSC.sum / currSC.count : 0;
+
+        // YoY compare vs same 14-day window last year (calendar shift by 365 days, consistent with existing rolling)
+        const curPrevYear = isoMinusDays(cur, 365);
+        const startPrevYear = isoMinusDays(curPrevYear, 13);
+        const prevSC = sumCountRangeInclusive(startPrevYear, curPrevYear);
+        const prevVal = prevSC.sum != null && prevSC.count ? prevSC.sum / prevSC.count : null;
+
+        points.push({
+          label: formatDDMMYYYY(cur),
+          units: currVal,
+          prev_year_units: prevVal,
+          yoy_pct: prevVal != null ? growthPct(currVal, prevVal) : null,
+          mom_pct: null,
+        });
+
+        cur = isoPlusDays(cur, 1);
+      }
+      return points;
+    }
+
+    // ✅ Weekly Rolling (AVG) (last 7 days)
     if (isWeeklyRollingAvg7) {
       const points: DailyChartPoint[] = [];
       let cur = f;
@@ -1027,7 +1062,8 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
 
     const values: number[] = [];
     if (showUnitsSeries) for (const p of dailyForChart) values.push(p.units);
-    else if (showPrevYearSeries) for (const p of dailyForChart) if (p.prev_year_units != null) values.push(p.prev_year_units);
+    else if (showPrevYearSeries)
+      for (const p of dailyForChart) if (p.prev_year_units != null) values.push(p.prev_year_units);
     else return null;
 
     if (values.length < 2) return null;
@@ -1372,6 +1408,7 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
 
   const rollingAvgLabel = "Last 30 Days Rolling Avg (YoY Growth)";
   const rollingSumLabel = "Last 30 Days Rolling Sum (YoY Growth)";
+  const fortnightRollingAvgLabel = "Fortnightly Rolling (AVG) (last 14 days)";
   const weeklyRollingAvgLabel = "Weekly Rolling (AVG) (last 7 days)";
 
   const isWeeklyRollingAvg7 = aggFreq === "weekly_roll7_avg";
@@ -1497,9 +1534,10 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                           className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                         >
                           <option value="rolling30_avg">{rollingAvgLabel}</option>
+                          <option value="rolling14_avg">{fortnightRollingAvgLabel}</option>
                           <option value="daily">Daily</option>
 
-                          {/* ✅ Replaced Weekly option with Weekly Rolling (AVG) (last 7 days) */}
+                          {/* ✅ Weekly Rolling (AVG) (last 7 days) */}
                           <option value="weekly_roll7_avg">{weeklyRollingAvgLabel}</option>
 
                           <option value="monthly">{calcMode === "avg" ? "Monthly (Avg)" : "Monthly (Sum)"}</option>
@@ -1602,9 +1640,11 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                       <div className="mt-2 text-[11px] text-slate-500">
                         {aggFreq === "rolling30_avg" || aggFreq === "rolling30_sum"
                           ? "Rolling Avg/Sum uses a 30-day window and compares against the same 30-day window last year."
-                          : aggFreq === "weekly_roll7_avg"
-                            ? "Weekly Rolling (AVG) uses a 7-day window and compares against the same 7-day window last year."
-                            : null}
+                          : aggFreq === "rolling14_avg"
+                            ? "Fortnightly Rolling (AVG) uses a 14-day window and compares against the same 14-day window last year."
+                            : aggFreq === "weekly_roll7_avg"
+                              ? "Weekly Rolling (AVG) uses a 7-day window and compares against the same 7-day window last year."
+                              : null}
                       </div>
                     </div>
                   </div>
@@ -1954,7 +1994,11 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                 <Stat
                   label="Latest day"
                   value={kpis.latest ? formatDDMMYYYY(kpis.latest.date) : "—"}
-                  sub={kpis.latest ? <div className="text-sm font-medium text-slate-600">{fmtValue(kpis.latest.value)}</div> : null}
+                  sub={
+                    kpis.latest ? (
+                      <div className="text-sm font-medium text-slate-600">{fmtValue(kpis.latest.value)}</div>
+                    ) : null
+                  }
                 />
 
                 <Stat
@@ -1975,9 +2019,17 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                   sub={<YoYSub value={kpis.avg30YoY} suffix="YoY" />}
                 />
 
-                <Stat label={ytdLabel} value={kpis.ytdValue != null ? fmtValue(kpis.ytdValue) : "—"} sub={<YoYSub value={kpis.ytdYoY} suffix="YoY" />} />
+                <Stat
+                  label={ytdLabel}
+                  value={kpis.ytdValue != null ? fmtValue(kpis.ytdValue) : "—"}
+                  sub={<YoYSub value={kpis.ytdYoY} suffix="YoY" />}
+                />
 
-                <Stat label="MTD Average" value={kpis.mtdAvg != null ? fmtValue(kpis.mtdAvg) : "—"} sub={<YoYSub value={kpis.mtdYoY} suffix="YoY" />} />
+                <Stat
+                  label="MTD Average"
+                  value={kpis.mtdAvg != null ? fmtValue(kpis.mtdAvg) : "—"}
+                  sub={<YoYSub value={kpis.mtdYoY} suffix="YoY" />}
+                />
               </div>
             )}
           </Card>
@@ -2047,7 +2099,13 @@ export default function ElectricityDashboard(props: ElectricityDashboardProps) {
                       />
 
                       {monthlyChartMean != null ? (
-                        <ReferenceLine y={monthlyChartMean} stroke="#000000" strokeDasharray="6 4" ifOverflow="extendDomain" isFront />
+                        <ReferenceLine
+                          y={monthlyChartMean}
+                          stroke="#000000"
+                          strokeDasharray="6 4"
+                          ifOverflow="extendDomain"
+                          isFront
+                        />
                       ) : null}
 
                       <Tooltip
